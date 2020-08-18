@@ -10,7 +10,7 @@ jobs:
 - job: ${{ parameters.name }}
   condition: and(succeeded(), ${{ parameters.matrix }})
   dependsOn: 
-    - PreBuildValidation
+#    - PreBuildValidation
     - GenerateBuildMatrix
   pool: ${{ parameters.pool }}
   strategy:
@@ -23,23 +23,42 @@ jobs:
     ${{ if eq(variables['System.TeamProject'], 'public') }}:
       imageBuilderBuildArgs: $(imageBuilder.queueArgs)
     imageBuilderDockerRunExtraOptions: $(build.imageBuilderDockerRunExtraOptions)
+    engCommonPath: $(Build.Repository.LocalPath)/$(Build.Repository.Name)/$(engCommonRelativePath)
+    engPath: $(Build.Repository.LocalPath)/$(Build.Repository.Name)/eng
+    versionsRepoPath: s/versions
   steps:
+  - checkout: self
+    path: $(Build.Repository.LocalPath)
+  - ${{ if eq(variables['System.TeamProject'], 'public') }}:
+    - checkout: VersionsRepo
+      path: $(versionsRepoPath)
+  - ${{ if eq(variables['System.TeamProject'], 'internal') }}:
+    - checkout: git://internal/dotnet-versions
+      path: $(versionsRepoPath)
   - template: ${{ format('../steps/init-docker-{0}.yml', parameters.dockerClientOS) }}
   - ${{ parameters.customInitSteps }}
-  - script: echo "##vso[task.setvariable variable=imageBuilderImageInfoArg]--image-info-output-path $(artifactsPath)/$(legName)-image-info.json"
-    displayName: Set Image Info Arg for Image Builder
+  - powershell: |
+      $imageBuilderBuildArgs = "$(imageBuilderBuildArgs) --image-info-output-path $(artifactsPath)/$(legName)-image-info.json"
+
+      if ($env:DISABLECACHING -eq "true") {
+        $imageBuilderBuildArgs = "$imageBuilderBuildArgs --disable-caching"
+      }
+
+      echo "##vso[task.setvariable variable=imageBuilderBuildArgs]$imageBuilderBuildArgs"
+    displayName: Set Image Builder Build Args
+  - template: ../steps/set-image-info-path-var.yml
   - script: >
       $(runImageBuilderCmd) build
-      --manifest $(manifest)
+      --manifest $(Build.Repository.Name)/$(manifest)
       $(imageBuilderPaths)
       $(osVersions)
       --os-type $(osType)
       --architecture $(architecture)
       --retry
       --source-repo $(publicGitRepoUri)
+      --image-info-source-path $(versionsRepoPath)/$(imageInfoVersionsPath)
       $(manifestVariables)
       $(imageBuilderBuildArgs)
-      $(imageBuilderImageInfoArg)
     displayName: Build Images
   - publish: $(Build.ArtifactStagingDirectory)/$(legName)-image-info.json
     artifact: $(legName)-image-info-$(System.JobAttempt)
